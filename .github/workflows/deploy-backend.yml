@@ -31,4 +31,3 @@ jobs:
         with:
           publish-profile: ${{ secrets.AZURE_RELLUNA_PUBLISH }}
           package: backend.zip
-
