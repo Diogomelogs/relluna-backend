@@ -26,6 +26,9 @@ jobs:
         run: |
           zip -r backend.zip .
 
+      - name: Make startup executable
+        run: chmod +x startup.sh
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v2
         with:
