@@ -1,5 +1,7 @@
 from datetime import datetime
+
 from fastapi import APIRouter, HTTPException, status
+from pymongo.errors import ServerSelectionTimeoutError
 
 from core.database import db
 from core.security import get_password_hash, verify_password, create_access_token
@@ -23,7 +25,14 @@ def _user_doc_to_in_db(doc) -> UserInDB:
 async def register(user_in: UserCreate):
     email = user_in.email.lower()
 
-    existing = await db.users.find_one({"email": email})
+    try:
+        existing = await db.users.find_one({"email": email})
+    except ServerSelectionTimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Falha ao conectar ao banco de dados. Verifique a conexão com o MongoDB Atlas.",
+        )
+
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -40,7 +49,13 @@ async def register(user_in: UserCreate):
         "created_at": now,
     }
 
-    result = await db.users.insert_one(doc)
+    try:
+        result = await db.users.insert_one(doc)
+    except ServerSelectionTimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Falha ao conectar ao banco de dados. Verifique a conexão com o MongoDB Atlas.",
+        )
 
     return UserPublic(
         id=str(result.inserted_id),
@@ -53,7 +68,14 @@ async def register(user_in: UserCreate):
 async def login(data: LoginData):
     email = data.email.lower()
 
-    doc = await db.users.find_one({"email": email})
+    try:
+        doc = await db.users.find_one({"email": email})
+    except ServerSelectionTimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Falha ao conectar ao banco de dados. Verifique a conexão com o MongoDB Atlas.",
+        )
+
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -69,5 +91,4 @@ async def login(data: LoginData):
         )
 
     access_token = create_access_token({"sub": user.id})
-
     return Token(access_token=access_token)
