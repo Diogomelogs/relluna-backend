@@ -146,4 +146,19 @@ async def narrate(data: dict = Body(...)):
         )
 
         response = openai_client.chat.completions.create(
-            model=OPENAI_DEPLOYMENT,  # ex.: relluna-gpt4o-mini
+            model=OPENAI_DEPLOYMENT,
+            messages=[
+                {"role": "system", "content": "Você escreve textos curtos, poéticos e emocionais."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=120,
+            temperature=0.7,
+        )
+
+        text = response.choices[0].message["content"]
+        return {"narrative": text.strip()}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
