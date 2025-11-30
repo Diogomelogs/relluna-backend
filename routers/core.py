@@ -4,13 +4,13 @@ import requests
 
 from fastapi import APIRouter, UploadFile, File, Body, HTTPException
 from fastapi.responses import JSONResponse
-from openai import AzureOpenAI
 from azure.storage.blob import BlobClient
+from openai import AzureOpenAI
 
 router = APIRouter()
 
 # ============================================================
-# VARIÁVEIS DE AMBIENTE
+# ENV
 # ============================================================
 
 AZURE_STORAGE_URL = os.getenv("AZURE_STORAGE_URL", "").rstrip("/")
@@ -23,22 +23,11 @@ OPENAI_ENDPOINT = os.getenv("OPENAI_ENDPOINT", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_DEPLOYMENT = os.getenv("OPENAI_DEPLOYMENT", "")
 
-if not AZURE_STORAGE_URL:
-    raise RuntimeError("AZURE_STORAGE_URL não definido")
-if not AZURE_BLOB_CONNECTION_STRING:
-    raise RuntimeError("AZURE_BLOB_CONNECTION_STRING não definido")
-if not VISION_ENDPOINT or not VISION_KEY:
-    raise RuntimeError("VISION_ENDPOINT ou VISION_KEY não definidos")
 if not OPENAI_ENDPOINT or not OPENAI_API_KEY or not OPENAI_DEPLOYMENT:
-    raise RuntimeError("OPENAI_* não definidos corretamente")
-
-
-# ============================================================
-# CLIENTE AZURE OPENAI (gpt-4o-mini)
-# ============================================================
+    raise RuntimeError("OPENAI configs não definidas corretamente.")
 
 openai_client = AzureOpenAI(
-    azure_endpoint=OPENAI_ENDPOINT,   # ex.: https://digop-mil6o1e7-eastus2.cognitiveservices.azure.com/
+    azure_endpoint=OPENAI_ENDPOINT,
     api_key=OPENAI_API_KEY,
     api_version="2024-12-01-preview",
 )
@@ -47,7 +36,7 @@ APP_NAME = "relluna-api"
 
 
 # ============================================================
-# HEALTH + ROOT
+# HEALTH & ROOT
 # ============================================================
 
 @router.get("/")
@@ -61,21 +50,16 @@ async def health():
 
 
 # ============================================================
-# UPLOAD + COMPUTER VISION
+# UPLOAD (Blob + Vision)
 # ============================================================
 
 @router.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    """
-    Envia imagem ao Blob Storage e analisa via Azure Vision.
-    """
     try:
         blob_name = f"{uuid.uuid4()}_{file.filename}"
 
-        # Extrair nome do container
-        container_url_parts = AZURE_STORAGE_URL.split("/")
-        account_url = "/".join(container_url_parts[:3])  # https://rellunastorage.blob.core.windows.net
-        container_name = container_url_parts[-1]
+        # pegar container
+        container_name = AZURE_STORAGE_URL.split("/")[-1]
 
         blob = BlobClient.from_connection_string(
             conn_str=AZURE_BLOB_CONNECTION_STRING,
@@ -88,6 +72,7 @@ async def upload(file: UploadFile = File(...)):
 
         blob_url = f"{AZURE_STORAGE_URL}/{blob_name}"
 
+        # vision
         analyze_url = (
             f"{VISION_ENDPOINT}/vision/v3.2/analyze"
             "?visualFeatures=Description,Tags,Faces"
@@ -96,7 +81,6 @@ async def upload(file: UploadFile = File(...)):
             "Ocp-Apim-Subscription-Key": VISION_KEY,
             "Content-Type": "application/json",
         }
-
         payload = {"url": blob_url}
 
         try:
@@ -104,10 +88,7 @@ async def upload(file: UploadFile = File(...)):
             if r.ok:
                 vision_result = r.json()
             else:
-                vision_result = {
-                    "error": r.text,
-                    "status": r.status_code,
-                }
+                vision_result = {"error": r.text, "status": r.status_code}
         except Exception as ex:
             vision_result = {"error": str(ex)}
 
@@ -118,17 +99,11 @@ async def upload(file: UploadFile = File(...)):
 
 
 # ============================================================
-# NARRATE – GPT-4o-mini
+# NARRATE (GPT-4o-mini)
 # ============================================================
 
 @router.post("/narrate")
 async def narrate(data: dict = Body(...)):
-    """
-    Gera uma narrativa curta em português a partir de uma lista de tags:
-    {
-        "tags": ["família", "praia"]
-    }
-    """
     try:
         tags_list = data.get("tags", [])
         if not isinstance(tags_list, list):
@@ -141,8 +116,7 @@ async def narrate(data: dict = Body(...)):
 
         prompt = (
             "Crie uma narrativa curta, emocional e humana em português, inspirada "
-            f"pelas seguintes tags: {tags}. "
-            "Use no máximo 3 frases."
+            f"pelas seguintes tags: {tags}. Use no máximo 3 frases."
         )
 
         response = openai_client.chat.completions.create(
@@ -158,7 +132,5 @@ async def narrate(data: dict = Body(...)):
         text = response.choices[0].message["content"]
         return {"narrative": text.strip()}
 
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
