@@ -109,28 +109,35 @@ async def narrate(data: dict = Body(...)):
         if not isinstance(tags_list, list):
             raise HTTPException(
                 status_code=400,
-                detail="Campo 'tags' deve ser uma lista de strings."
+                detail="Campo 'tags' deve ser uma lista de strings.",
             )
 
         tags = ", ".join(tags_list) if tags_list else "memórias pessoais"
 
         prompt = (
-            "Crie uma narrativa curta, emocional e humana em português, inspirada "
-            f"pelas seguintes tags: {tags}. Use no máximo 3 frases."
+            "Você é a inteligência narrativa da Relluna. "
+            "Você recebe palavras‑chave e pistas sobre uma foto, como tags visuais, ano aproximado, tipo de lugar e clima. "
+            f"As palavras‑chave desta imagem são: {tags}. "
+            "Escreva uma descrição contextualizada em português, com 3 a 6 frases, "
+            "que ajude a lembrar do tipo de momento retratado (ambiente, clima, tipo de relação, ocasião), "
+            "mas sem inventar nomes próprios, graus de parentesco específicos "
+            "(como avô, tia) ou detalhes concretos que não estejam claramente implícitos nas palavras‑chave. "
+            "Use expressões genéricas como 'uma pessoa', 'uma família', 'um grupo', 'um momento especial', "
+            "e foque em como a cena poderia ser sentida e lembrada, não em criar uma história fictícia."
         )
 
         response = openai_client.chat.completions.create(
             model=OPENAI_DEPLOYMENT,
-            messages=[
-                {"role": "system", "content": "Você escreve textos curtos, poéticos e emocionais."},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=120,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=90,
             temperature=0.7,
         )
 
-        text = response.choices[0].message["content"]
+        message = response.choices[0].message
+        text = message.content if hasattr(message, "content") else str(message)
         return {"narrative": text.strip()}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
