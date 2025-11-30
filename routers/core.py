@@ -1,0 +1,147 @@
+import os
+import uuid
+import requests
+
+from fastapi import APIRouter, UploadFile, File, Body, HTTPException
+from fastapi.responses import JSONResponse
+from openai import AzureOpenAI
+from azure.storage.blob import BlobClient
+
+router = APIRouter()
+
+# ========= Variáveis de ambiente =========
+
+# URL do contêiner, ex.: https://rellunastorage.blob.core.windows.net/uploads
+AZURE_STORAGE_URL = os.getenv("AZURE_STORAGE_URL", "").rstrip("/")
+
+# Opcional: usar a connection string completa em vez de só a key
+AZURE_BLOB_CONNECTION_STRING = os.getenv("AZURE_BLOB_CONNECTION_STRING", "")
+
+VISION_ENDPOINT = os.getenv("VISION_ENDPOINT", "").rstrip("/")
+VISION_KEY = os.getenv("VISION_KEY", "")
+
+OPENAI_ENDPOINT = os.getenv("OPENAI_ENDPOINT", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_DEPLOYMENT = os.getenv("OPENAI_DEPLOYMENT", "")
+
+if not AZURE_STORAGE_URL:
+    raise RuntimeError("AZURE_STORAGE_URL não definido")
+
+if not AZURE_BLOB_CONNECTION_STRING:
+    raise RuntimeError("AZURE_BLOB_CONNECTION_STRING não definido")
+
+if not VISION_ENDPOINT or not VISION_KEY:
+    raise RuntimeError("VISION_ENDPOINT ou VISION_KEY não definidos")
+
+if not OPENAI_ENDPOINT or not OPENAI_API_KEY or not OPENAI_DEPLOYMENT:
+    raise RuntimeError("OPENAI_* para Azure OpenAI/AI Studio não definidos")
+
+# Cliente Azure OpenAI (ou AI Studio) usando o endpoint relluna.services.ai.azure.com
+openai_client = AzureOpenAI(
+    api_key=OPENAI_API_KEY,
+    api_version="2023-05-15",
+    azure_endpoint=OPENAI_ENDPOINT,
+)
+
+APP_NAME = "relluna-api"
+
+
+@router.get("/")
+async def root():
+    return {"message": "Relluna API online", "app": APP_NAME}
+
+
+@router.get("/health")
+async def health():
+    return {"status": "ok", "app": APP_NAME, "message": "Relluna API online"}
+
+
+@router.post("/upload")
+async def upload(file: UploadFile = File(...)):
+    """
+    Envia a imagem para o Blob Storage e chama a Vision API.
+    Retorna a URL do blob + JSON da análise.
+    """
+    try:
+        blob_name = f"{uuid.uuid4()}_{file.filename}"
+
+        # Cliente do blob usando a connection string e o nome do contêiner embutido na URL
+        # AZURE_STORAGE_URL = https://rellunastorage.blob.core.windows.net/uploads
+        container_url_parts = AZURE_STORAGE_URL.split("/")
+        account_url = "/".join(container_url_parts[:3])  # https://...blob.core.windows.net
+        container_name = container_url_parts[-1]         # uploads
+
+        blob = BlobClient.from_connection_string(
+            conn_str=AZURE_BLOB_CONNECTION_STRING,
+            container_name=container_name,
+            blob_name=blob_name,
+        )
+
+        data = await file.read()
+        blob.upload_blob(data, overwrite=True)
+
+        blob_url = f"{AZURE_STORAGE_URL}/{blob_name}"
+
+        analyze_url = (
+            f"{VISION_ENDPOINT}/vision/v3.2/analyze"
+            "?visualFeatures=Description,Tags,Faces"
+        )
+        headers = {
+            "Ocp-Apim-Subscription-Key": VISION_KEY,
+            "Content-Type": "application/json",
+        }
+        payload = {"url": blob_url}
+
+        try:
+            r = requests.post(analyze_url, headers=headers, json=payload, timeout=20)
+            if r.ok:
+                vision_result = r.json()
+            else:
+                vision_result = {"error": r.text, "status": r.status_code}
+        except Exception as ex:
+            vision_result = {"error": str(ex)}
+
+        return JSONResponse({"blob": blob_url, "vision": vision_result})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/narrate")
+async def narrate(data: dict = Body(...)):
+    """
+    Gera uma narrativa curta em português a partir de uma lista de tags.
+    Body esperado:
+    {
+      "tags": ["família", "praia", "infância"]
+    }
+    """
+    try:
+        tags_list = data.get("tags", [])
+        if not isinstance(tags_list, list):
+            raise HTTPException(
+                status_code=400,
+                detail="Campo 'tags' deve ser uma lista de strings.",
+            )
+
+        tags = ", ".join(tags_list) if tags_list else "memórias pessoais"
+
+        prompt = (
+            "Crie uma narrativa curta e emocional em português sobre uma lembrança "
+            f"que envolve: {tags}."
+        )
+
+        response = openai_client.chat.completions.create(
+            model=OPENAI_DEPLOYMENT,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=120,
+            temperature=0.7,
+        )
+
+        text = response.choices[0].message["content"]
+        return {"narrative": text.strip()}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

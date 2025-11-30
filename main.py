@@ -4,6 +4,8 @@ from fastapi.staticfiles import StaticFiles
 
 from routers.auth import router as auth_router
 from routers.memories import router as memories_router
+from routers.core import router as core_router  # novo router com /, /health, /upload, /narrate
+
 
 app = FastAPI(
     title="Relluna API",
@@ -35,15 +37,8 @@ app.add_middleware(
 # Servir arquivos locais da pasta "uploads" (apenas se existir no App Service)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-
-@app.get("/health")
-async def health():
-    return {
-        "status": "ok",
-        "app": "relluna-api",
-        "message": "Relluna API online",
-    }
-
+# Rotas principais do núcleo (/, /health, /upload, /narrate)
+app.include_router(core_router, prefix="", tags=["core"])
 
 # Rotas de autenticação e memórias
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
