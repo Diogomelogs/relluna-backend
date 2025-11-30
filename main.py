@@ -4,8 +4,12 @@ from fastapi.staticfiles import StaticFiles
 
 from routers.auth import router as auth_router
 from routers.memories import router as memories_router
-from routers.core import router as core_router  # novo router com /, /health, /upload, /narrate
+from routers.core import router as core_router
 
+
+# ============================================================
+# CONFIGURAÇÃO FASTAPI
+# ============================================================
 
 app = FastAPI(
     title="Relluna API",
@@ -15,31 +19,42 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
-# Origens permitidas para o frontend (dev + produção)
+# ============================================================
+# CORS – Permissões para o Frontend
+# ============================================================
+
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://192.168.0.181:3000",
     "https://relluna.me",
     "https://www.relluna.me",
-    # se o front estiver no Vercel, adicione aqui
-    # "https://SEU-PROJETO.vercel.app",
+    # "https://SEU_PROJECTO.vercel.app",  # adicione quando publicar no Vercel
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,          # em DEV, se precisar, pode trocar por ["*"]
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Servir arquivos locais da pasta "uploads" (apenas se existir no App Service)
+# ============================================================
+# SERVIR ARQUIVOS ESTÁTICOS (APENAS SE EXISTIR "uploads/")
+# ============================================================
+
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-# Rotas principais do núcleo (/, /health, /upload, /narrate)
+# ============================================================
+# REGISTRO DOS ROUTERS
+# ============================================================
+
+# Núcleo: /, /health, /upload, /narrate
 app.include_router(core_router, prefix="", tags=["core"])
 
-# Rotas de autenticação e memórias
+# Autenticação
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
+
+# Memórias
 app.include_router(memories_router, prefix="/memories", tags=["memories"])

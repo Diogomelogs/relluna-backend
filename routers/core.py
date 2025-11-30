@@ -9,12 +9,11 @@ from azure.storage.blob import BlobClient
 
 router = APIRouter()
 
-# ========= Variáveis de ambiente =========
+# ============================================================
+# VARIÁVEIS DE AMBIENTE
+# ============================================================
 
-# URL do contêiner, ex.: https://rellunastorage.blob.core.windows.net/uploads
 AZURE_STORAGE_URL = os.getenv("AZURE_STORAGE_URL", "").rstrip("/")
-
-# Opcional: usar a connection string completa em vez de só a key
 AZURE_BLOB_CONNECTION_STRING = os.getenv("AZURE_BLOB_CONNECTION_STRING", "")
 
 VISION_ENDPOINT = os.getenv("VISION_ENDPOINT", "").rstrip("/")
@@ -26,25 +25,30 @@ OPENAI_DEPLOYMENT = os.getenv("OPENAI_DEPLOYMENT", "")
 
 if not AZURE_STORAGE_URL:
     raise RuntimeError("AZURE_STORAGE_URL não definido")
-
 if not AZURE_BLOB_CONNECTION_STRING:
     raise RuntimeError("AZURE_BLOB_CONNECTION_STRING não definido")
-
 if not VISION_ENDPOINT or not VISION_KEY:
     raise RuntimeError("VISION_ENDPOINT ou VISION_KEY não definidos")
-
 if not OPENAI_ENDPOINT or not OPENAI_API_KEY or not OPENAI_DEPLOYMENT:
-    raise RuntimeError("OPENAI_* para Azure OpenAI/AI Studio não definidos")
+    raise RuntimeError("OPENAI_* não definidos corretamente")
 
-# Cliente Azure OpenAI (ou AI Studio) usando o endpoint relluna.services.ai.azure.com
+
+# ============================================================
+# CLIENTE AZURE OPENAI (gpt-4o-mini)
+# ============================================================
+
 openai_client = AzureOpenAI(
+    azure_endpoint=OPENAI_ENDPOINT,   # ex.: https://digop-mil6o1e7-eastus2.cognitiveservices.azure.com/
     api_key=OPENAI_API_KEY,
-    api_version="2023-05-15",
-    azure_endpoint=OPENAI_ENDPOINT,
+    api_version="2024-12-01-preview",
 )
 
 APP_NAME = "relluna-api"
 
+
+# ============================================================
+# HEALTH + ROOT
+# ============================================================
 
 @router.get("/")
 async def root():
@@ -53,23 +57,25 @@ async def root():
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "app": APP_NAME, "message": "Relluna API online"}
+    return {"status": "ok", "app": APP_NAME}
 
+
+# ============================================================
+# UPLOAD + COMPUTER VISION
+# ============================================================
 
 @router.post("/upload")
 async def upload(file: UploadFile = File(...)):
     """
-    Envia a imagem para o Blob Storage e chama a Vision API.
-    Retorna a URL do blob + JSON da análise.
+    Envia imagem ao Blob Storage e analisa via Azure Vision.
     """
     try:
         blob_name = f"{uuid.uuid4()}_{file.filename}"
 
-        # Cliente do blob usando a connection string e o nome do contêiner embutido na URL
-        # AZURE_STORAGE_URL = https://rellunastorage.blob.core.windows.net/uploads
+        # Extrair nome do container
         container_url_parts = AZURE_STORAGE_URL.split("/")
-        account_url = "/".join(container_url_parts[:3])  # https://...blob.core.windows.net
-        container_name = container_url_parts[-1]         # uploads
+        account_url = "/".join(container_url_parts[:3])  # https://rellunastorage.blob.core.windows.net
+        container_name = container_url_parts[-1]
 
         blob = BlobClient.from_connection_string(
             conn_str=AZURE_BLOB_CONNECTION_STRING,
@@ -90,6 +96,7 @@ async def upload(file: UploadFile = File(...)):
             "Ocp-Apim-Subscription-Key": VISION_KEY,
             "Content-Type": "application/json",
         }
+
         payload = {"url": blob_url}
 
         try:
@@ -97,7 +104,10 @@ async def upload(file: UploadFile = File(...)):
             if r.ok:
                 vision_result = r.json()
             else:
-                vision_result = {"error": r.text, "status": r.status_code}
+                vision_result = {
+                    "error": r.text,
+                    "status": r.status_code,
+                }
         except Exception as ex:
             vision_result = {"error": str(ex)}
 
@@ -107,13 +117,16 @@ async def upload(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============================================================
+# NARRATE – GPT-4o-mini
+# ============================================================
+
 @router.post("/narrate")
 async def narrate(data: dict = Body(...)):
     """
-    Gera uma narrativa curta em português a partir de uma lista de tags.
-    Body esperado:
+    Gera uma narrativa curta em português a partir de uma lista de tags:
     {
-      "tags": ["família", "praia", "infância"]
+        "tags": ["família", "praia"]
     }
     """
     try:
@@ -121,27 +134,16 @@ async def narrate(data: dict = Body(...)):
         if not isinstance(tags_list, list):
             raise HTTPException(
                 status_code=400,
-                detail="Campo 'tags' deve ser uma lista de strings.",
+                detail="Campo 'tags' deve ser uma lista de strings."
             )
 
         tags = ", ".join(tags_list) if tags_list else "memórias pessoais"
 
         prompt = (
-            "Crie uma narrativa curta e emocional em português sobre uma lembrança "
-            f"que envolve: {tags}."
+            "Crie uma narrativa curta, emocional e humana em português, inspirada "
+            f"pelas seguintes tags: {tags}. "
+            "Use no máximo 3 frases."
         )
 
         response = openai_client.chat.completions.create(
-            model=OPENAI_DEPLOYMENT,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=120,
-            temperature=0.7,
-        )
-
-        text = response.choices[0].message["content"]
-        return {"narrative": text.strip()}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            model=OPENAI_DEPLOYMENT,  # ex.: relluna-gpt4o-mini

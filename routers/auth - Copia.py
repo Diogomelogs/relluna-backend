@@ -23,14 +23,14 @@ def _user_doc_to_in_db(doc) -> UserInDB:
 
 @router.post("/register", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
 async def register(user_in: UserCreate):
-    email = user_in.email.lower().strip().replace(" ", "")
+    email = user_in.email.lower()
 
     try:
         existing = await db.users.find_one({"email": email})
     except ServerSelectionTimeoutError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Falha ao conectar ao banco de dados. Verifique MongoDB Atlas.",
+            detail="Falha ao conectar ao banco de dados. Verifique a conexão com o MongoDB Atlas.",
         )
 
     if existing:
@@ -54,7 +54,7 @@ async def register(user_in: UserCreate):
     except ServerSelectionTimeoutError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Falha ao conectar ao banco de dados.",
+            detail="Falha ao conectar ao banco de dados. Verifique a conexão com o MongoDB Atlas.",
         )
 
     return UserPublic(
@@ -66,23 +66,29 @@ async def register(user_in: UserCreate):
 
 @router.post("/login", response_model=Token)
 async def login(data: LoginData):
-    email = data.email.lower().strip().replace(" ", "")
+    email = data.email.lower()
 
     try:
         doc = await db.users.find_one({"email": email})
     except ServerSelectionTimeoutError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Falha ao conectar ao banco de dados.",
+            detail="Falha ao conectar ao banco de dados. Verifique a conexão com o MongoDB Atlas.",
         )
 
     if not doc:
-        raise HTTPException(status_code=401, detail="Credenciais inválidas.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciais inválidas.",
+        )
 
     user = _user_doc_to_in_db(doc)
 
     if not verify_password(data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Credenciais inválidas.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciais inválidas.",
+        )
 
     access_token = create_access_token({"sub": user.id})
     return Token(access_token=access_token)
