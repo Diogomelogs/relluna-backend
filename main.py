@@ -6,10 +6,6 @@ from routers.auth import router as auth_router
 from routers.memories import router as memories_router
 from routers.core import router as core_router
 
-# ============================================================
-# APP FASTAPI
-# ============================================================
-
 app = FastAPI(
     title="Relluna API",
     version="0.1.0",
@@ -17,10 +13,6 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json",
 )
-
-# ============================================================
-# CORS
-# ============================================================
 
 origins = [
     "http://localhost:3000",
@@ -38,15 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================================
-# STATIC FILES
-# ============================================================
-
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-
-# ============================================================
-# ROUTERS
-# ============================================================
 
 app.include_router(core_router, prefix="", tags=["core"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])

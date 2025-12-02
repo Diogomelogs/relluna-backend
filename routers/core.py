@@ -1,6 +1,7 @@
 import os
 import uuid
 import requests
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, UploadFile, File, Body, HTTPException
 from fastapi.responses import JSONResponse
@@ -34,20 +35,17 @@ openai_client = AzureOpenAI(
 
 APP_NAME = "relluna-api"
 
-
 # ============================================================
-# HEALTH & ROOT
+# ROOT + HEALTH
 # ============================================================
 
 @router.get("/")
 async def root():
     return {"message": "Relluna API online", "app": APP_NAME}
 
-
 @router.get("/health")
 async def health():
     return {"status": "ok", "app": APP_NAME}
-
 
 # ============================================================
 # UPLOAD (Blob + Vision)
@@ -57,8 +55,6 @@ async def health():
 async def upload(file: UploadFile = File(...)):
     try:
         blob_name = f"{uuid.uuid4()}_{file.filename}"
-
-        # pegar container
         container_name = AZURE_STORAGE_URL.split("/")[-1]
 
         blob = BlobClient.from_connection_string(
@@ -69,10 +65,8 @@ async def upload(file: UploadFile = File(...)):
 
         data = await file.read()
         blob.upload_blob(data, overwrite=True)
-
         blob_url = f"{AZURE_STORAGE_URL}/{blob_name}"
 
-        # vision
         analyze_url = (
             f"{VISION_ENDPOINT}/vision/v3.2/analyze"
             "?visualFeatures=Description,Tags,Faces"
@@ -85,10 +79,7 @@ async def upload(file: UploadFile = File(...)):
 
         try:
             r = requests.post(analyze_url, headers=headers, json=payload, timeout=20)
-            if r.ok:
-                vision_result = r.json()
-            else:
-                vision_result = {"error": r.text, "status": r.status_code}
+            vision_result = r.json() if r.ok else {"error": r.text}
         except Exception as ex:
             vision_result = {"error": str(ex)}
 
@@ -97,45 +88,111 @@ async def upload(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 # ============================================================
-# NARRATE (GPT-4o-mini)
+# ACCESSIBILITY (ALT + SHORT + LONG)
 # ============================================================
 
-@router.post("/narrate")
-async def narrate(data: dict = Body(...)):
+@router.post("/accessibility")
+async def accessibility(payload: Dict[str, Any] = Body(...)):
+    """
+    ALT TEXT + SHORT DESCRIPTION + LONG DESCRIPTION
+    usando Vision + texto do usuário
+    """
     try:
-        tags_list = data.get("tags", [])
-        if not isinstance(tags_list, list):
+        blob_url = payload.get("blob_url")
+        vision_result = payload.get("vision_result") or {}
+        user_caption = (payload.get("user_caption") or "").strip()
+
+        if not blob_url or not vision_result:
             raise HTTPException(
                 status_code=400,
-                detail="Campo 'tags' deve ser uma lista de strings.",
+                detail="Campos 'blob_url' e 'vision_result' são obrigatórios.",
             )
 
-        tags = ", ".join(tags_list) if tags_list else "memórias pessoais"
-
-        prompt = (
-            "Você é a inteligência narrativa da Relluna. "
-            "Você recebe palavras‑chave e pistas sobre uma foto, como tags visuais, ano aproximado, tipo de lugar e clima. "
-            f"As palavras‑chave desta imagem são: {tags}. "
-            "Escreva uma descrição contextualizada em português, com 3 a 6 frases, "
-            "que ajude a lembrar do tipo de momento retratado (ambiente, clima, tipo de relação, ocasião), "
-            "mas sem inventar nomes próprios, graus de parentesco específicos "
-            "(como avô, tia) ou detalhes concretos que não estejam claramente implícitos nas palavras‑chave. "
-            "Use expressões genéricas como 'uma pessoa', 'uma família', 'um grupo', 'um momento especial', "
-            "e foque em como a cena poderia ser sentida e lembrada, não em criar uma história fictícia."
+        # Vision → caption + tags
+        desc = vision_result.get("description") or {}
+        captions: List[Dict[str, Any]] = desc.get("captions") or []
+        vision_caption = (
+            captions[0].get("text") if captions and isinstance(captions[0], dict)
+            else "Imagem."
         )
 
-        response = openai_client.chat.completions.create(
+        tags_raw = vision_result.get("tags") or []
+        tag_names: List[str] = []
+        for t in tags_raw:
+            if isinstance(t, dict):
+                if t.get("name"):
+                    tag_names.append(t["name"])
+            else:
+                tag_names.append(str(t))
+
+        tags_str = ", ".join(tag_names) if tag_names else "memória pessoal"
+
+        # =======================
+        # ALT TEXT (1 frase)
+        # =======================
+        alt_prompt = (
+            "Gere um texto alternativo (alt text) em UMA frase, útil para uma pessoa "
+            "com deficiência visual, usando apenas o que o usuário descreveu e o que o Vision detectou.\n\n"
+            f"Descrição do usuário: {user_caption or '[vazia]'}\n"
+            f"Legenda do Vision: {vision_caption}\n"
+            f"Tags: {tags_str}\n"
+        )
+
+        alt_resp = openai_client.chat.completions.create(
             model=OPENAI_DEPLOYMENT,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=90,
-            temperature=0.7,
+            messages=[{"role": "user", "content": alt_prompt}],
+            max_tokens=60,
+            temperature=0.2,
+        )
+        alt_msg = alt_resp.choices[0].message
+        alt_text = alt_msg.content.strip()
+
+        # =======================
+        # SHORT DESCRIPTION (1–2 frases)
+        # =======================
+        short_prompt = (
+            "Descreva a imagem em 1–2 frases, de forma objetiva e acessível.\n"
+            "Use apenas o que o usuário disse e o que o Vision detectou. Não invente nada.\n\n"
+            f"Descrição do usuário: {user_caption or '[vazia]'}\n"
+            f"Legenda do Vision: {vision_caption}\n"
+            f"Tags: {tags_str}\n"
         )
 
-        message = response.choices[0].message
-        text = message.content if hasattr(message, "content") else str(message)
-        return {"narrative": text.strip()}
+        short_resp = openai_client.chat.completions.create(
+            model=OPENAI_DEPLOYMENT,
+            messages=[{"role": "user", "content": short_prompt}],
+            max_tokens=80,
+            temperature=0.3,
+        )
+        short_description = short_resp.choices[0].message.content.strip()
+
+        # =======================
+        # LONG DESCRIPTION (3–6 frases)
+        # =======================
+        long_prompt = (
+            "Crie uma descrição acessível e detalhada (3–6 frases), "
+            "usando APENAS o texto do usuário, a legenda do Vision e as tags detectadas.\n"
+            "Não invente nomes, locais ou relações familiares não citadas.\n"
+            "Se o usuário mencionou 'mãos do meu avô', você pode repetir exatamente.\n\n"
+            f"Descrição do usuário: {user_caption or '[vazia]'}\n"
+            f"Legenda do Vision: {vision_caption}\n"
+            f"Tags: {tags_str}\n"
+        )
+
+        long_resp = openai_client.chat.completions.create(
+            model=OPENAI_DEPLOYMENT,
+            messages=[{"role": "user", "content": long_prompt}],
+            max_tokens=220,
+            temperature=0.3,
+        )
+        long_description = long_resp.choices[0].message.content.strip()
+
+        return {
+            "alt_text": alt_text,
+            "short_description": short_description,
+            "long_description": long_description,
+        }
 
     except HTTPException:
         raise

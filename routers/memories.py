@@ -52,10 +52,8 @@ async def upload_file(
     Recebe um arquivo (imagem/vídeo), salva em disco na pasta 'uploads'
     e retorna a URL pública local (http://localhost:8000/uploads/...).
     """
-    # garante pasta
     os.makedirs("uploads", exist_ok=True)
 
-    # nome de arquivo simples: <user_id>_<timestamp>_<nome_original>
     safe_name = file.filename.replace(" ", "_")
     filename = f"{user_id}_{int(datetime.utcnow().timestamp())}_{safe_name}"
     filepath = os.path.join("uploads", filename)
@@ -78,9 +76,12 @@ def _doc_to_memory(doc) -> MemoryPublic:
     return MemoryPublic(
         id=str(doc["_id"]),
         user_id=str(doc["user_id"]),
-        main_caption=doc["main_caption"],
+        main_caption=doc.get("main_caption", ""),
         media_url=doc.get("media_url"),
         tags=doc.get("tags", []),
+        alt_text=doc.get("alt_text"),
+        short_description=doc.get("short_description"),
+        long_description=doc.get("long_description"),
         created_at=doc["created_at"],
     )
 
@@ -92,13 +93,17 @@ async def create_memory(
 ):
     """
     Cria uma memória ligada ao usuário autenticado.
-    Pode receber ou não uma media_url (vinda do upload-file).
+    Pode receber ou não uma media_url (vinda do /core/upload ou /memories/upload-file).
+    Inclui campos de acessibilidade IA se fornecidos.
     """
     doc = {
         "user_id": ObjectId(user_id),
         "main_caption": memory_in.main_caption,
         "media_url": memory_in.media_url,
-        "tags": memory_in.tags,
+        "tags": memory_in.tags or [],
+        "alt_text": memory_in.alt_text,
+        "short_description": memory_in.short_description,
+        "long_description": memory_in.long_description,
         "created_at": datetime.utcnow(),
     }
     result = await db.timeline_items.insert_one(doc)
@@ -112,6 +117,7 @@ async def list_memories(
 ):
     """
     Lista memórias do usuário autenticado em ordem decrescente de criação.
+    Inclui campos de acessibilidade IA.
     """
     cursor = db.timeline_items.find({"user_id": ObjectId(user_id)}).sort(
         "created_at", -1
@@ -129,6 +135,7 @@ async def get_memory(
 ):
     """
     Detalhe de uma memória específica do usuário autenticado.
+    Inclui campos de acessibilidade IA.
     """
     try:
         oid = ObjectId(memory_id)
